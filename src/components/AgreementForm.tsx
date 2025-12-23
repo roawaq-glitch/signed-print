@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { jsPDF } from 'jspdf';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -6,13 +6,16 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import SignaturePad, { SignaturePadRef } from './SignaturePad';
 import AgreementPreview from './AgreementPreview';
-import { FileDown, Eye, PenTool, User } from 'lucide-react';
+import { FileDown, Eye, PenTool, User, Loader2 } from 'lucide-react';
+import { loadAmiriFont, containsArabic } from '@/lib/arabicFont';
 
 const AgreementForm: React.FC = () => {
   const [name, setName] = useState('');
   const [hasSignature, setHasSignature] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [signatureData, setSignatureData] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [amiriFont, setAmiriFont] = useState<string | null>(null);
   const signaturePadRef = useRef<SignaturePadRef>(null);
 
   const currentDate = new Date().toLocaleDateString('en-US', {
@@ -21,6 +24,12 @@ const AgreementForm: React.FC = () => {
     day: 'numeric',
   });
 
+  // Preload Arabic font
+  useEffect(() => {
+    loadAmiriFont()
+      .then(setAmiriFont)
+      .catch(() => console.warn('Arabic font not available'));
+  }, []);
   const handlePreview = () => {
     if (!name.trim()) {
       toast.error('Please enter your name');
@@ -36,7 +45,7 @@ const AgreementForm: React.FC = () => {
     setShowPreview(true);
   };
 
-  const generatePDF = () => {
+  const generatePDF = async () => {
     if (!name.trim()) {
       toast.error('Please enter your name');
       return;
@@ -48,16 +57,26 @@ const AgreementForm: React.FC = () => {
       return;
     }
 
-    const pdf = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4',
-    });
+    setIsGenerating(true);
 
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const margin = 20;
-    const contentWidth = pageWidth - margin * 2;
-    let yPosition = 30;
+    try {
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      // Add Arabic font if the name contains Arabic characters
+      const hasArabicName = containsArabic(name);
+      if (hasArabicName && amiriFont) {
+        pdf.addFileToVFS('Amiri-Regular.ttf', amiriFont);
+        pdf.addFont('Amiri-Regular.ttf', 'Amiri', 'normal');
+      }
+
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const margin = 20;
+      const contentWidth = pageWidth - margin * 2;
+      let yPosition = 30;
 
     // Header
     pdf.setFontSize(10);
@@ -94,7 +113,13 @@ const AgreementForm: React.FC = () => {
     pdf.text('Party Name', margin + 5, yPosition + 8);
     pdf.setFontSize(14);
     pdf.setTextColor(30, 41, 59);
+    
+    // Use Arabic font for name if needed
+    if (hasArabicName && amiriFont) {
+      pdf.setFont('Amiri', 'normal');
+    }
     pdf.text(name, margin + 5, yPosition + 18);
+    pdf.setFont('helvetica', 'normal'); // Reset to default font
 
     // Terms
     yPosition += 35;
@@ -128,9 +153,21 @@ const AgreementForm: React.FC = () => {
 
     yPosition += 8;
     pdf.setFontSize(11);
-    const acknowledgment = `I, ${name}, hereby acknowledge that I have read and understood the terms outlined above.`;
-    const splitAck = pdf.splitTextToSize(acknowledgment, contentWidth);
-    pdf.text(splitAck, margin, yPosition);
+    
+    // Build acknowledgment with Arabic name support
+    if (hasArabicName && amiriFont) {
+      pdf.text('I, ', margin, yPosition);
+      const iWidth = pdf.getTextWidth('I, ');
+      pdf.setFont('Amiri', 'normal');
+      pdf.text(name, margin + iWidth, yPosition);
+      const nameWidth = pdf.getTextWidth(name);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text(', hereby acknowledge that I have read and understood the terms outlined above.', margin + iWidth + nameWidth, yPosition);
+    } else {
+      const acknowledgment = `I, ${name}, hereby acknowledge that I have read and understood the terms outlined above.`;
+      const splitAck = pdf.splitTextToSize(acknowledgment, contentWidth);
+      pdf.text(splitAck, margin, yPosition);
+    }
 
     // Signature Section
     yPosition += 25;
@@ -168,7 +205,13 @@ const AgreementForm: React.FC = () => {
     yPosition += 5;
     pdf.setFontSize(10);
     pdf.setTextColor(30, 41, 59);
+    
+    // Use Arabic font for name under signature if needed
+    if (hasArabicName && amiriFont) {
+      pdf.setFont('Amiri', 'normal');
+    }
     pdf.text(name, margin, yPosition);
+    pdf.setFont('helvetica', 'normal');
     pdf.text('Date of Signing', pageWidth / 2 + 10, yPosition);
 
     // Footer
@@ -182,9 +225,15 @@ const AgreementForm: React.FC = () => {
       { align: 'center' }
     );
 
-    // Save PDF
-    pdf.save(`agreement-${name.replace(/\s+/g, '-').toLowerCase()}.pdf`);
-    toast.success('Agreement PDF generated successfully!');
+      // Save PDF
+      pdf.save(`agreement-${name.replace(/\s+/g, '-').toLowerCase()}.pdf`);
+      toast.success('Agreement PDF generated successfully!');
+    } catch (error) {
+      console.error('PDF generation error:', error);
+      toast.error('Failed to generate PDF. Please try again.');
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
@@ -255,11 +304,15 @@ const AgreementForm: React.FC = () => {
                 <Button
                   type="button"
                   onClick={generatePDF}
-                  disabled={!name.trim() || !hasSignature}
+                  disabled={!name.trim() || !hasSignature || isGenerating}
                   className="flex-1 h-12 gap-2 btn-generate"
                 >
-                  <FileDown className="h-4 w-4" />
-                  Generate PDF
+                  {isGenerating ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileDown className="h-4 w-4" />
+                  )}
+                  {isGenerating ? 'Generating...' : 'Generate PDF'}
                 </Button>
               </div>
             </div>
