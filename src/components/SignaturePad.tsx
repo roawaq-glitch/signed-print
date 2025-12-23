@@ -26,7 +26,8 @@ const SignaturePad = forwardRef<SignaturePadRef, SignaturePadProps>(
         if (signatureRef.current?.isEmpty()) {
           return null;
         }
-        return signatureRef.current?.getTrimmedCanvas().toDataURL('image/png') || null;
+        // Use getCanvas instead of getTrimmedCanvas to avoid trim-canvas compatibility issues
+        return signatureRef.current?.getCanvas().toDataURL('image/png') || null;
       },
       isEmpty: () => signatureRef.current?.isEmpty() ?? true,
     }));
